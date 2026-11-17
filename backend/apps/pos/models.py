@@ -16,11 +16,14 @@ from typing import Any, NoReturn
 from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.core.validators import MinValueValidator
-from django.db import models, transaction
+from django.db import connection, models, transaction
 from django.db.models import F, Max, Q
 from django.utils import timezone
 
 USER = settings.AUTH_USER_MODEL
+
+# Postgres advisory-lock key that serialises Outbox sequence allocation.
+OUTBOX_LOCK_ID = 7001
 
 
 class BaseModel(models.Model):
@@ -170,12 +173,15 @@ class Shift(BaseModel):
 
 class OrderManager(models.Manager["Order"]):
     def create_for_shift(self, shift: Shift, created_by: Any, **fields: Any) -> Order:
-        """Create an order with the next sequential number for the shift (race-safe)."""
+        """Create a live order with the next sequential number for the shift (race-safe).
+        Backfilled orders have their own number range and never consume live numbers.
+        """
         with transaction.atomic():
             locked = Shift.objects.select_for_update().get(pk=shift.pk)
             if locked.status != Shift.Status.OPEN:
                 raise ValidationError("Cannot create an order on a closed shift.")
-            last = self.filter(shift=locked).aggregate(m=Max("order_number"))["m"] or 0
+            live = self.filter(shift=locked, is_backfilled=False)
+            last = live.aggregate(m=Max("order_number"))["m"] or 0
             return self.create(shift=locked, created_by=created_by, order_number=last + 1, **fields)
 
 
@@ -207,18 +213,35 @@ class Order(BaseModel):
     voided_at = models.DateTimeField(null=True, blank=True)
     void_reason = models.CharField(max_length=255, blank=True)
 
+    # When the sale actually happened. Differs from created_at for backfilled orders.
+    occurred_at = models.DateTimeField(default=timezone.now)
+    # Backfill: taken on paper during a total outage, entered later by a manager.
+    is_backfilled = models.BooleanField(default=False)
+    backfill_reason = models.CharField(max_length=255, blank=True)
+    backfilled_by = models.ForeignKey(
+        USER, on_delete=models.PROTECT, null=True, blank=True, related_name="orders_backfilled"
+    )
+
     objects = OrderManager()
 
     class Meta:
         constraints = [
+            # Live and backfilled orders number independently within a shift.
             models.UniqueConstraint(
-                fields=["shift", "order_number"], name="uniq_order_number_per_shift"
-            )
+                fields=["shift", "is_backfilled", "order_number"],
+                name="uniq_order_number_per_shift_kind",
+            ),
+            models.CheckConstraint(
+                condition=Q(is_backfilled=False)
+                | (~Q(backfill_reason="") & Q(backfilled_by__isnull=False)),
+                name="order_backfill_requires_reason_and_actor",
+            ),
         ]
         indexes = [models.Index(fields=["shift", "status"])]
 
     def __str__(self) -> str:
-        return f"#{self.order_number} ({self.status})"
+        prefix = "B-" if self.is_backfilled else "#"
+        return f"{prefix}{self.order_number} ({self.status})"
 
 
 class OrderItem(BaseModel):
@@ -281,6 +304,14 @@ class Payment(BaseModel):
         max_length=24, choices=Status.choices, default=Status.PENDING, db_index=True
     )
     amount = models.DecimalField(max_digits=12, decimal_places=2)
+
+    # Supplied by the client per "Confirm" action. A double-tap or an offline replay carries
+    # the same key, so the second insert fails instead of creating a second payment.
+    idempotency_key = models.UUIDField(unique=True, default=uuid.uuid4, editable=False)
+
+    # When money actually changed hands. Reconciliation matches on this, not created_at.
+    occurred_at = models.DateTimeField(default=timezone.now)
+
     # Cash
     tendered_amount = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)
     change_given = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)
@@ -467,7 +498,7 @@ class AuditEvent(models.Model):
 
 class Outbox(BaseModel):
     """Transactional outbox: written in the same DB transaction as the business change, then
-    drained by a worker (cloud sync, notifications). idempotency_key makes re-queuing safe."""
+    drained by a worker (cloud sync, notifications). Always create rows via Outbox.enqueue()."""
 
     class Status(models.TextChoices):
         PENDING = "pending", "Pending"
@@ -479,12 +510,56 @@ class Outbox(BaseModel):
     aggregate_id = models.CharField(max_length=64)
     event_type = models.CharField(max_length=64)
     payload = models.JSONField(default=dict)
+
     status = models.CharField(max_length=12, choices=Status.choices, default=Status.PENDING)
     attempts = models.PositiveSmallIntegerField(default=0)
     available_at = models.DateTimeField(default=timezone.now)
     processed_at = models.DateTimeField(null=True, blank=True)
     last_error = models.TextField(blank=True)
+
     idempotency_key = models.CharField(max_length=128, unique=True)
 
+    # Monotonic ordering key: an order's rows always drain before its payment's rows.
+    sequence = models.PositiveBigIntegerField(unique=True, null=True, blank=True, editable=False)
+
+    # Set while a drain worker holds the row, so a restarted worker can reclaim stale locks.
+    locked_at = models.DateTimeField(null=True, blank=True)
+
     class Meta:
-        indexes = [models.Index(fields=["status", "available_at"])]
+        indexes = [
+            models.Index(fields=["status", "available_at"]),
+            models.Index(fields=["status", "sequence"]),
+        ]
+
+    @classmethod
+    def enqueue(
+        cls,
+        *,
+        aggregate_type: str,
+        aggregate_id: str,
+        event_type: str,
+        payload: dict[str, Any],
+        idempotency_key: str,
+    ) -> tuple["Outbox", bool]:
+        """Write an outbox row. Returns (row, created).
+        Call this inside the SAME transaction as the business write. Re-enqueuing the same
+        idempotency_key returns the existing row instead of creating a duplicate.
+        """
+        with transaction.atomic():
+            with connection.cursor() as cursor:
+                cursor.execute("SELECT pg_advisory_xact_lock(%s)", [OUTBOX_LOCK_ID])
+
+            existing = cls.objects.filter(idempotency_key=idempotency_key).first()
+            if existing is not None:
+                return existing, False
+
+            last = cls.objects.aggregate(m=Max("sequence"))["m"] or 0
+            row = cls.objects.create(
+                aggregate_type=aggregate_type,
+                aggregate_id=aggregate_id,
+                event_type=event_type,
+                payload=payload,
+                idempotency_key=idempotency_key,
+                sequence=last + 1,
+            )
+            return row, True
