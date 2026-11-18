@@ -70,6 +70,7 @@ All variables live in `.env` (git-ignored). Only `.env.example` is committed, an
 | `MPESA_ENV` | `sandbox` or `production`. | `sandbox` |
 | `MPESA_CONSUMER_KEY` / `MPESA_CONSUMER_SECRET` | Daraja credentials. Never commit these. | _(blank)_ |
 | `MPESA_SHORTCODE` / `MPESA_PASSKEY` / `MPESA_CALLBACK_URL` | Daraja STK push configuration. | _(blank)_ |
+| `POS_PRICES_TAX_INCLUSIVE` | `True` if menu prices already include VAT, `False` if tax is added on top. | `True` |
 
 ---
 
