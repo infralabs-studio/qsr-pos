@@ -88,3 +88,7 @@ USE_TZ = True
 STATIC_URL = "static/"
 STATIC_ROOT = BASE_DIR / "staticfiles"
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
+
+
+# Whether menu prices already include VAT. Open product decision: change via env, never in code.
+POS_PRICES_TAX_INCLUSIVE = env.bool("POS_PRICES_TAX_INCLUSIVE", default=True)
