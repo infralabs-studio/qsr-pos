@@ -57,7 +57,7 @@ class OfflineSchemaTests(TestCase):
             payload={},
             idempotency_key="payment:1:confirmed",
         )
-        
+
         self.assertTrue(created_first)
         self.assertFalse(created_again)
         self.assertEqual(first.pk, again.pk)
