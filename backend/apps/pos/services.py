@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Sequence
+from datetime import datetime
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Any
 
@@ -86,15 +87,24 @@ def _validate_modifiers(menu_item: MenuItem, options: Sequence[ModifierOption]) 
 
 
 def _audit(
-    *, event_type: str, actor: User, target_type: str, target_id: Any, new_state: dict[str, Any]
+    *,
+    event_type: str,
+    actor: User | None,
+    target_type: str,
+    target_id: Any,
+    new_state: dict[str, Any],
+    previous_state: dict[str, Any] | None = None,
+    reason: str = "",
 ) -> None:
     AuditEvent.objects.create(
         event_type=event_type,
         actor=actor,
-        actor_role=actor.role,
+        actor_role=actor.role if actor else "",
         target_type=target_type,
         target_id=str(target_id),
+        previous_state=previous_state,
         new_state=new_state,
+        reason=reason,
     )
 
 
@@ -146,6 +156,38 @@ def _payment_snapshot(payment: Payment) -> dict[str, Any]:
         "occurred_at": payment.occurred_at.isoformat(),
         "mpesa_receipt_code": payment.mpesa_receipt_code,
     }
+
+
+def mark_order_paid(*, order: Order, payment: Payment, paid_at: datetime) -> None:
+    """Shared settlement step for cash and M-PESA. Must be called inside transaction.atomic()
+    with the Order row already locked."""
+    order.status = Order.Status.PAID
+    order.paid_at = paid_at
+    order.save(update_fields=["status", "paid_at", "updated_at"])
+
+    # Stub queue only: the real print service drains this in Sprint 2.
+    PrintJob.objects.get_or_create(
+        order=order,
+        job_type=PrintJob.JobType.KITCHEN_TICKET,
+        is_reprint=False,
+        defaults={"payload": {"order_number": order.order_number}},
+    )
+
+    # Same transaction, in causal order: the order drains before its payment.
+    Outbox.enqueue(
+        aggregate_type="order",
+        aggregate_id=str(order.pk),
+        event_type="order.paid",
+        payload=_order_snapshot(order),
+        idempotency_key=f"order:{order.pk}:paid",
+    )
+    Outbox.enqueue(
+        aggregate_type="payment",
+        aggregate_id=str(payment.pk),
+        event_type="payment.confirmed",
+        payload=_payment_snapshot(payment),
+        idempotency_key=f"payment:{payment.pk}:confirmed",
+    )
 
 
 # --------------------------------------------------------------------------- services
@@ -229,6 +271,41 @@ def charge_order(*, order: Order) -> Order:
         return locked
 
 
+def finalize_paid_order(order: Order, payment: Payment, now: datetime) -> None:
+    """Order -> paid, queue the (stub) kitchen ticket and the Outbox events.
+
+    Shared by cash confirmation and M-PESA confirmation. Must run inside the caller's
+    transaction with the order row locked. Safe to call again for the same order.
+    """
+    order.status = Order.Status.PAID
+    order.paid_at = order.paid_at or now
+    order.save(update_fields=["status", "paid_at", "updated_at"])
+
+    # Stub queue only: the real print service drains this in Sprint 2.
+    PrintJob.objects.get_or_create(
+        order=order,
+        job_type=PrintJob.JobType.KITCHEN_TICKET,
+        is_reprint=False,
+        defaults={"payload": {"order_number": order.order_number}},
+    )
+
+    # Same transaction, in causal order: the order drains before its payment.
+    Outbox.enqueue(
+        aggregate_type="order",
+        aggregate_id=str(order.pk),
+        event_type="order.paid",
+        payload=_order_snapshot(order),
+        idempotency_key=f"order:{order.pk}:paid",
+    )
+    Outbox.enqueue(
+        aggregate_type="payment",
+        aggregate_id=str(payment.pk),
+        event_type="payment.confirmed",
+        payload=_payment_snapshot(payment),
+        idempotency_key=f"payment:{payment.pk}:confirmed",
+    )
+
+
 def confirm_cash_payment(
     *,
     order: Order,
@@ -272,32 +349,7 @@ def confirm_cash_payment(
             occurred_at=now,
             idempotency_key=idempotency_key,
         )
-        locked.status = Order.Status.PAID
-        locked.paid_at = now
-        locked.save(update_fields=["status", "paid_at", "updated_at"])
-
-        # Stub queue only: the real print service drains this in Sprint 2.
-        PrintJob.objects.create(
-            order=locked,
-            job_type=PrintJob.JobType.KITCHEN_TICKET,
-            payload={"order_number": locked.order_number},
-        )
-
-        # Same transaction, in causal order: the order drains before its payment.
-        Outbox.enqueue(
-            aggregate_type="order",
-            aggregate_id=str(locked.pk),
-            event_type="order.paid",
-            payload=_order_snapshot(locked),
-            idempotency_key=f"order:{locked.pk}:paid",
-        )
-        Outbox.enqueue(
-            aggregate_type="payment",
-            aggregate_id=str(payment.pk),
-            event_type="payment.confirmed",
-            payload=_payment_snapshot(payment),
-            idempotency_key=f"payment:{payment.pk}:confirmed",
-        )
+        finalize_paid_order(locked, payment, now)
         _audit(
             event_type="payment.cash_confirmed",
             actor=recorded_by,
