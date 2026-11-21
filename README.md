@@ -71,6 +71,11 @@ All variables live in `.env` (git-ignored). Only `.env.example` is committed, an
 | `MPESA_CONSUMER_KEY` / `MPESA_CONSUMER_SECRET` | Daraja credentials. Never commit these. | _(blank)_ |
 | `MPESA_SHORTCODE` / `MPESA_PASSKEY` / `MPESA_CALLBACK_URL` | Daraja STK push configuration. | _(blank)_ |
 | `POS_PRICES_TAX_INCLUSIVE` | `True` if menu prices already include VAT, `False` if tax is added on top. | `True` |
+| `CLOUD_SYNC_URL` | Cloud ingest endpoint the Outbox drains to. Blank disables sync. | _(blank)_ |
+| `CLOUD_API_KEY` | Shared secret for the cloud ingest endpoint. | `change-me` |
+| `CLOUD_MOCK_ENABLED` | Enables the mock receiver. Set only on the mock cloud service. | `False` |
+| `OUTBOX_BATCH_SIZE` / `OUTBOX_POLL_SECONDS` / `OUTBOX_LEASE_SECONDS` | Drain batch size, poll interval, and the lease before a dead worker's rows are reclaimed. | `50` / `5` / `60` |
+| `OUTBOX_BACKOFF_BASE_SECONDS` / `OUTBOX_BACKOFF_CAP_SECONDS` | Retry backoff while the cloud is unreachable. | `2` / `60` |
 
 ---
 

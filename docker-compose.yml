@@ -34,6 +34,72 @@ services:
     volumes:
       - ./backend:/app
     command: sh -c "python manage.py migrate --noinput && python manage.py runserver 0.0.0.0:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/healthz/')"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  # Drains the Outbox to the cloud. Idles harmlessly while CLOUD_SYNC_URL is blank.
+  sync:
+    build:
+      context: ./backend
+      args:
+        REQUIREMENTS: dev
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      POSTGRES_HOST: db
+      POSTGRES_PORT: "5432"
+    depends_on:
+      db:
+        condition: service_healthy
+      backend:
+        condition: service_healthy
+    volumes:
+      - ./backend:/app
+    command: python manage.py drain_outbox
+
+  # ---- Mock cloud (profile: cloud-mock): a separate app and database, for the chaos tests ----
+  cloud-db:
+    profiles: ["cloud-mock"]
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: cloud_pos
+      POSTGRES_USER: ${POSTGRES_USER:?set POSTGRES_USER in .env}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+    volumes:
+      - cloud-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d cloud_pos"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  cloud:
+    profiles: ["cloud-mock"]
+    build:
+      context: ./backend
+      args:
+        REQUIREMENTS: dev
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      CLOUD_MOCK_ENABLED: "true"
+      DJANGO_ALLOWED_HOSTS: "cloud,localhost,127.0.0.1"
+      POSTGRES_HOST: cloud-db
+      POSTGRES_PORT: "5432"
+      POSTGRES_DB: cloud_pos
+    depends_on:
+      cloud-db:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:8001:8000"
+    volumes:
+      - ./backend:/app
+    command: sh -c "python manage.py migrate --noinput && python manage.py runserver 0.0.0.0:8000"
 
 volumes:
   pgdata:
+  cloud-pgdata:
