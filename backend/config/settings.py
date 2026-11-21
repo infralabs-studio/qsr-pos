@@ -26,6 +26,7 @@ INSTALLED_APPS = [
     "corsheaders",
     "apps.accounts",
     "apps.pos",
+    "apps.cloudmock",
 ]
 
 MIDDLEWARE = [
@@ -92,3 +93,13 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 # Whether menu prices already include VAT. Open product decision: change via env, never in code.
 POS_PRICES_TAX_INCLUSIVE = env.bool("POS_PRICES_TAX_INCLUSIVE", default=True)
+
+# --- Cloud sync (Outbox drain) ---
+CLOUD_SYNC_URL = env("CLOUD_SYNC_URL", default="")  # blank = sync disabled
+CLOUD_API_KEY = env("CLOUD_API_KEY", default="")
+CLOUD_MOCK_ENABLED = env.bool("CLOUD_MOCK_ENABLED", default=False)  # mock receiver, cloud only
+OUTBOX_BATCH_SIZE = env.int("OUTBOX_BATCH_SIZE", default=50)
+OUTBOX_POLL_SECONDS = env.int("OUTBOX_POLL_SECONDS", default=5)
+OUTBOX_LEASE_SECONDS = env.int("OUTBOX_LEASE_SECONDS", default=60)
+OUTBOX_BACKOFF_BASE_SECONDS = env.int("OUTBOX_BACKOFF_BASE_SECONDS", default=2)
+OUTBOX_BACKOFF_CAP_SECONDS = env.int("OUTBOX_BACKOFF_CAP_SECONDS", default=60)
