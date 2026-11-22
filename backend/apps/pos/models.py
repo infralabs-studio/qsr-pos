@@ -332,6 +332,11 @@ class Payment(BaseModel):
     )
     confirmed_at = models.DateTimeField(null=True, blank=True)
 
+    last_reconciled_at = models.DateTimeField(null=True, blank=True)
+    # Set when reconciliation finds a near match, so the manager confirms with one tap.
+    suggested_receipt_code = models.CharField(max_length=20, blank=True)
+    reconciliation_note = models.CharField(max_length=255, blank=True)
+
     class Meta:
         constraints = [
             models.CheckConstraint(condition=Q(amount__gt=0), name="payment_amount_gt_0")

@@ -18,7 +18,13 @@ from django.utils import timezone
 from apps.pos.models import Payment
 from apps.pos.payment_states import PaymentEvent
 
-from .base import InitiationResult, PaymentProvider, ProviderEvent, ProviderUnavailable
+from .base import (
+    InitiationResult,
+    LedgerTransaction,
+    PaymentProvider,
+    ProviderEvent,
+    ProviderUnavailable,
+)
 
 if TYPE_CHECKING:
     from apps.pos.models import PaymentAttempt
@@ -219,3 +225,38 @@ class MockMpesaProvider(PaymentProvider):
             result_desc=str(callback.get("ResultDesc", "")),
             raw=payload,
         )
+
+
+class MockLedgerSource:
+    """Adapts MockLedger to the TransactionSource protocol. Flip .online to simulate losing
+    the connection to Safaricom's records."""
+
+    def __init__(self, ledger: MockLedger) -> None:
+        self.ledger = ledger
+        self.online = True
+
+    def _check(self) -> None:
+        if not self.online:
+            raise ProviderUnavailable("Cannot reach M-PESA records.")
+
+    @staticmethod
+    def _convert(entry: LedgerEntry) -> LedgerTransaction:
+        return LedgerTransaction(
+            receipt_code=entry.receipt_code,
+            amount=entry.amount,
+            phone_number=entry.phone_number,
+            occurred_at=entry.occurred_at,
+        )
+
+    def lookup(self, receipt_code: str) -> LedgerTransaction | None:
+        self._check()
+        entry = self.ledger.find_by_receipt(receipt_code)
+        return self._convert(entry) if entry is not None and entry.succeeded else None
+
+    def candidates(self, start: datetime, end: datetime) -> list[LedgerTransaction]:
+        self._check()
+        return [
+            self._convert(entry)
+            for entry in self.ledger.successful_between(start, end)
+            if entry.receipt_code
+        ]

@@ -129,6 +129,7 @@ def _order_snapshot(order: Order) -> dict[str, Any]:
         )
     return {
         "id": str(order.pk),
+        "status": order.status,
         "shift_id": str(order.shift_id),
         "order_number": order.order_number,
         "is_backfilled": order.is_backfilled,
@@ -222,15 +223,19 @@ def add_item(
     quantity: int = 1,
     options: Sequence[ModifierOption] = (),
     note: str = "",
+    check_availability: bool = True,
 ) -> OrderItem:
-    """Add a line to an order that is still being built. Prices are snapshotted."""
+    """Add a line to an order that is still being built. Prices are snapshotted.
+
+    check_availability=False is for backfill only: the item was sold while it was available.
+    """
     if quantity < 1:
         raise ValidationError("Quantity must be at least 1.")
     with transaction.atomic():
         locked = Order.objects.select_for_update().get(pk=order.pk)
         if locked.status != Order.Status.BUILDING:
             raise ValidationError("Items can only be added while the order is being built.")
-        if not menu_item.is_available:
+        if check_availability and not menu_item.is_available:
             raise ValidationError(f"{menu_item.name} is not available right now.")
         _validate_modifiers(menu_item, options)
 
@@ -282,12 +287,14 @@ def finalize_paid_order(order: Order, payment: Payment, now: datetime) -> None:
     order.save(update_fields=["status", "paid_at", "updated_at"])
 
     # Stub queue only: the real print service drains this in Sprint 2.
-    PrintJob.objects.get_or_create(
-        order=order,
-        job_type=PrintJob.JobType.KITCHEN_TICKET,
-        is_reprint=False,
-        defaults={"payload": {"order_number": order.order_number}},
-    )
+    # A backfilled order was served long ago: it never prints a kitchen ticket.
+    if not order.is_backfilled:
+        PrintJob.objects.get_or_create(
+            order=order,
+            job_type=PrintJob.JobType.KITCHEN_TICKET,
+            is_reprint=False,
+            defaults={"payload": {"order_number": order.order_number}},
+        )
 
     # Same transaction, in causal order: the order drains before its payment.
     Outbox.enqueue(
@@ -312,11 +319,13 @@ def confirm_cash_payment(
     tendered: Decimal,
     recorded_by: User,
     idempotency_key: uuid.UUID,
+    occurred_at: datetime | None = None,
 ) -> tuple[Payment, bool]:
     """Confirm a cash payment. Returns (payment, created).
 
     Generate idempotency_key once per tap of "Confirm" on the client. Replays with the same key
     (double-tap, retry after a crash) return the original payment and change nothing.
+    occurred_at is for backfill: when the money actually changed hands.
     """
     with transaction.atomic():
         locked = (
@@ -346,7 +355,7 @@ def confirm_cash_payment(
             recorded_by=recorded_by,
             confirmed_by=recorded_by,
             confirmed_at=now,
-            occurred_at=now,
+            occurred_at=occurred_at or now,
             idempotency_key=idempotency_key,
         )
         finalize_paid_order(locked, payment, now)
