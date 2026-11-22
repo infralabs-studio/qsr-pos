@@ -5,7 +5,9 @@ from __future__ import annotations
 import re
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
+from datetime import datetime
+from decimal import Decimal
+from typing import TYPE_CHECKING, Any, Protocol
 
 from django.core.exceptions import ValidationError
 
@@ -63,3 +65,22 @@ def normalize_msisdn(raw: str) -> str:
     if match is None:
         raise ValidationError("Enter a Safaricom number like 07XX XXX XXX.")
     return "254" + match.group(1)
+
+
+@dataclass(frozen=True)
+class LedgerTransaction:
+    """One transaction in Safaricom's records."""
+
+    receipt_code: str
+    amount: Decimal
+    phone_number: str
+    occurred_at: datetime
+
+
+class TransactionSource(Protocol):
+    """Where reconciliation looks money up. Both methods raise ProviderUnavailable when the
+    records cannot be reached (terminal offline, Daraja down)."""
+
+    def lookup(self, receipt_code: str) -> LedgerTransaction | None: ...
+
+    def candidates(self, start: datetime, end: datetime) -> list[LedgerTransaction]: ...
