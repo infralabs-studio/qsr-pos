@@ -107,3 +107,7 @@ OUTBOX_BACKOFF_CAP_SECONDS = env.int("OUTBOX_BACKOFF_CAP_SECONDS", default=60)
 # --- Reconciliation ---
 RECONCILIATION_WINDOW_MINUTES = env.int("RECONCILIATION_WINDOW_MINUTES", default=30)
 RECONCILIATION_GRACE_HOURS = env.int("RECONCILIATION_GRACE_HOURS", default=24)
+
+# --- M-PESA records (reconciliation source) ---
+MPESA_RECORDS_URL = env("MPESA_RECORDS_URL", default="")  # blank = reconciliation disabled
+RECONCILE_POLL_SECONDS = env.int("RECONCILE_POLL_SECONDS", default=30)

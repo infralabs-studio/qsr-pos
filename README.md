@@ -77,6 +77,8 @@ All variables live in `.env` (git-ignored). Only `.env.example` is committed, an
 | `OUTBOX_BATCH_SIZE` / `OUTBOX_POLL_SECONDS` / `OUTBOX_LEASE_SECONDS` | Drain batch size, poll interval, and the lease before a dead worker's rows are reclaimed. | `50` / `5` / `60` |
 | `OUTBOX_BACKOFF_BASE_SECONDS` / `OUTBOX_BACKOFF_CAP_SECONDS` | Retry backoff while the cloud is unreachable. | `2` / `60` |
 | `RECONCILIATION_WINDOW_MINUTES` / `RECONCILIATION_GRACE_HOURS` | Time window for near matches, and hours before an unmatched manual payment goes to manager review. | `30` / `24` |
+| `MPESA_RECORDS_URL` | Where reconciliation looks up M-PESA transactions. Blank disables it. | _(blank)_ |
+| `RECONCILE_POLL_SECONDS` | Seconds between reconciliation passes. | `30` |
 
 ---
 
