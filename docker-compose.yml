@@ -40,6 +40,26 @@ services:
       timeout: 5s
       retries: 30
 
+      # Reconciles manual M-PESA payments against the M-PESA records. Idles while MPESA_RECORDS_URL is blank.
+  reconcile:
+    build:
+      context: ./backend
+      args:
+        REQUIREMENTS: dev
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      POSTGRES_HOST: db
+      POSTGRES_PORT: "5432"
+    depends_on:
+      db:
+        condition: service_healthy
+      backend:
+        condition: service_healthy
+    volumes:
+      - ./backend:/app
+    command: python manage.py reconcile_mpesa
+
   # Drains the Outbox to the cloud. Idles harmlessly while CLOUD_SYNC_URL is blank.
   sync:
     build:
