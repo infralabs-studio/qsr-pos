@@ -138,12 +138,22 @@ def apply_event(
         return TransitionResult(TransitionStatus.APPLIED, locked, current, target, detail)
 
 
+def _callback_mismatch(event: ProviderEvent, attempt: PaymentAttempt) -> str:
+    """Why a success callback cannot be trusted as-is ('' when it can)."""
+    if event.event != PaymentEvent.SUCCEEDED:
+        return ""
+    if event.amount is not None and event.amount != attempt.amount:
+        return f"Paid KES {event.amount} but the prompt was for KES {attempt.amount}."
+    return ""
+
+
 def handle_provider_event(event: ProviderEvent) -> TransitionResult | None:
     """Apply a provider callback or status-query result.
 
     Returns None for an unknown request id. A second delivery of the same final result only
-    bumps callback_count and changes nothing else; a contradictory final result still flows
-    through the state machine (e.g. failed -> succeeded -> manager_review).
+    bumps callback_count and changes nothing else. A contradictory success after a failure
+    escalates to manager review, and a success whose amount does not match the prompt is
+    never confirmed automatically.
     """
     if event.event not in _ATTEMPT_STATUS:
         raise ValueError(f"{event.event.value} is not a provider event")
@@ -152,30 +162,33 @@ def handle_provider_event(event: ProviderEvent) -> TransitionResult | None:
     if not event.checkout_request_id:
         return None
 
-    lookup = (
-        PaymentAttempt.objects.filter(checkout_request_id=event.checkout_request_id)
-        .values_list("pk", "payment_id", "payment__order_id")
-        .first()
-    )
-    if lookup is None:
-        logger.warning("Provider event for unknown request %s", event.checkout_request_id)
-        return None
-
-    attempt_id, payment_id, order_id = lookup
     with transaction.atomic():
-        # Maintain global lock order: Order -> Payment -> PaymentAttempt.
-        Order.objects.select_for_update().get(pk=order_id)
-        payment = Payment.objects.select_for_update().get(pk=payment_id)
-        attempt = PaymentAttempt.objects.select_for_update().get(pk=attempt_id)
+        attempt = (
+            PaymentAttempt.objects.select_for_update()
+            .filter(checkout_request_id=event.checkout_request_id)
+            .first()
+        )
+        if attempt is None:
+            logger.warning("Provider event for unknown request %s", event.checkout_request_id)
+            return None
 
+        payment = attempt.payment
         attempt.callback_count += 1
-        if attempt.result_code == event.result_code:
+        contradictory_success = (
+            attempt.result_code is not None
+            and attempt.result_code != 0
+            and event.event == PaymentEvent.SUCCEEDED
+        )
+        if attempt.result_code is not None and not contradictory_success:
             attempt.save(update_fields=["callback_count", "updated_at"])
             return TransitionResult(
                 TransitionStatus.NOOP, payment, payment.status, payment.status, "Duplicate callback"
             )
 
-        if attempt.result_code is None:
+        mismatch = _callback_mismatch(event, attempt)
+        if contradictory_success:
+            attempt.save(update_fields=["callback_count", "updated_at"])
+        else:
             attempt.result_code = event.result_code
             attempt.result_desc = event.result_desc
             attempt.mpesa_receipt_code = event.receipt_code
@@ -183,14 +196,25 @@ def handle_provider_event(event: ProviderEvent) -> TransitionResult | None:
             attempt.status = _ATTEMPT_STATUS[event.event]
             attempt.resolved_at = timezone.now()
             attempt.save()
-        else:
-            attempt.save(update_fields=["callback_count", "updated_at"])
 
+        if mismatch:
+            return apply_event(
+                payment,
+                PaymentEvent.FLAGGED_FOR_REVIEW,
+                receipt_code=event.receipt_code,
+                review_reason=Payment.ReviewReason.OTHER.value,
+                detail=mismatch,
+            )
         return apply_event(
             payment,
             event.event,
             receipt_code=event.receipt_code,
-            detail=event.result_desc,
+            review_reason=(Payment.ReviewReason.OTHER.value if contradictory_success else ""),
+            detail=(
+                "Success callback arrived after a failed attempt"
+                if contradictory_success
+                else event.result_desc
+            ),
         )
 
 

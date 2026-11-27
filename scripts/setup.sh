@@ -37,6 +37,7 @@ fill_placeholder() {
 fill_placeholder DJANGO_SECRET_KEY
 fill_placeholder POSTGRES_PASSWORD
 fill_placeholder CLOUD_API_KEY
+fill_placeholder MPESA_CALLBACK_TOKEN
 
 # 2. Optional host virtualenv
 if [ "${1:-}" = "--local" ]; then

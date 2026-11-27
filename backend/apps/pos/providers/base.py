@@ -31,6 +31,7 @@ class ProviderEvent:
     result_code: int | None = None
     result_desc: str = ""
     raw: dict[str, Any] = field(default_factory=dict)
+    amount: Decimal | None = None
 
 
 @dataclass(frozen=True)

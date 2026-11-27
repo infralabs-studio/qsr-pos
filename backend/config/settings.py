@@ -24,9 +24,11 @@ INSTALLED_APPS = [
     "django.contrib.messages",
     "django.contrib.staticfiles",
     "corsheaders",
+    "rest_framework",
     "apps.accounts",
     "apps.pos",
     "apps.cloudmock",
+    "apps.api",
 ]
 
 MIDDLEWARE = [
@@ -111,3 +113,18 @@ RECONCILIATION_GRACE_HOURS = env.int("RECONCILIATION_GRACE_HOURS", default=24)
 # --- M-PESA records (reconciliation source) ---
 MPESA_RECORDS_URL = env("MPESA_RECORDS_URL", default="")  # blank = reconciliation disabled
 RECONCILE_POLL_SECONDS = env.int("RECONCILE_POLL_SECONDS", default=30)
+
+# --- HTTP API ---
+REST_FRAMEWORK = {
+    "DEFAULT_AUTHENTICATION_CLASSES": ["rest_framework.authentication.SessionAuthentication"],
+    "DEFAULT_PERMISSION_CLASSES": ["rest_framework.permissions.IsAuthenticated"],
+    "DEFAULT_RENDERER_CLASSES": ["rest_framework.renderers.JSONRenderer"],
+    "DEFAULT_PARSER_CLASSES": ["rest_framework.parsers.JSONParser"],
+    "DEFAULT_THROTTLE_RATES": {"login": "10/min"},
+    "EXCEPTION_HANDLER": "apps.api.errors.api_exception_handler",
+}
+MPESA_PROVIDER = env("MPESA_PROVIDER", default="mock")
+STK_TIMEOUT_SECONDS = env.int("STK_TIMEOUT_SECONDS", default=90)
+MPESA_CALLBACK_TOKEN = env("MPESA_CALLBACK_TOKEN", default="")
+CSRF_TRUSTED_ORIGINS = env.list("CSRF_TRUSTED_ORIGINS", default=["http://localhost:5173"])
+SESSION_COOKIE_AGE = env.int("SESSION_COOKIE_AGE_SECONDS", default=28800)  # until idle lock exists

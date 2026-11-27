@@ -79,6 +79,11 @@ All variables live in `.env` (git-ignored). Only `.env.example` is committed, an
 | `RECONCILIATION_WINDOW_MINUTES` / `RECONCILIATION_GRACE_HOURS` | Time window for near matches, and hours before an unmatched manual payment goes to manager review. | `30` / `24` |
 | `MPESA_RECORDS_URL` | Where reconciliation looks up M-PESA transactions. Blank disables it. | _(blank)_ |
 | `RECONCILE_POLL_SECONDS` | Seconds between reconciliation passes. | `30` |
+| `MPESA_PROVIDER` | STK provider. Only `mock` exists until QSR-201. | `mock` |
+| `STK_TIMEOUT_SECONDS` | Seconds before an unanswered STK prompt times out. | `90` |
+| `MPESA_CALLBACK_TOKEN` | Secret path segment of the STK callback URL. Blank/`change-me` disables it. | `change-me` |
+| `CSRF_TRUSTED_ORIGINS` | Origins allowed to POST with a session (Vite dev server, LAN origin). | `http://localhost:5173` |
+| `SESSION_COOKIE_AGE_SECONDS` | Session lifetime until the idle lock exists. | `28800` |
 
 ---
 

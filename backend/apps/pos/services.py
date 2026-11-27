@@ -14,7 +14,7 @@ from decimal import ROUND_HALF_UP, Decimal
 from typing import Any
 
 from django.conf import settings
-from django.core.exceptions import ValidationError
+from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import IntegrityError, transaction
 from django.utils import timezone
 
@@ -367,3 +367,28 @@ def confirm_cash_payment(
             new_state=_payment_snapshot(payment),
         )
         return payment, True
+
+
+def get_open_shift() -> Shift | None:
+    return Shift.objects.filter(status=Shift.Status.OPEN).first()
+
+
+def open_shift(*, opened_by: User, opening_float: Decimal) -> Shift:
+    """Open the shift (manager only). The one-open-shift rule is enforced by the database."""
+    if not opened_by.is_manager:
+        raise PermissionDenied("A manager must open the shift.")
+    if opening_float < 0:
+        raise ValidationError("The starting float cannot be negative.")
+    try:
+        with transaction.atomic():
+            shift = Shift.objects.create(opened_by=opened_by, opening_float=opening_float)
+            _audit(
+                event_type="shift.opened",
+                actor=opened_by,
+                target_type="shift",
+                target_id=shift.pk,
+                new_state={"opening_float": _money(opening_float)},
+            )
+    except IntegrityError as exc:
+        raise ValidationError("A shift is already open.") from exc
+    return shift

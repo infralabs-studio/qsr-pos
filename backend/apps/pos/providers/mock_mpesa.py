@@ -16,7 +16,6 @@ from typing import TYPE_CHECKING, Any
 from django.utils import timezone
 
 from apps.pos.models import Payment
-from apps.pos.payment_states import PaymentEvent
 
 from .base import (
     InitiationResult,
@@ -25,6 +24,7 @@ from .base import (
     ProviderEvent,
     ProviderUnavailable,
 )
+from .stk_callback import event_for_result_code, parse_stk_callback
 
 if TYPE_CHECKING:
     from apps.pos.models import PaymentAttempt
@@ -53,14 +53,6 @@ RESULT_DESCRIPTIONS: dict[Outcome, str] = {
     Outcome.WRONG_PIN: "Wrong PIN entered.",
     Outcome.UNREACHABLE: "The user cannot be reached.",
 }
-
-
-def event_for_result_code(code: int) -> PaymentEvent:
-    if code == 0:
-        return PaymentEvent.SUCCEEDED
-    if code == 1032:
-        return PaymentEvent.CANCELLED
-    return PaymentEvent.FAILED
 
 
 def new_receipt_code() -> str:
@@ -201,30 +193,8 @@ class MockMpesaProvider(PaymentProvider):
 
     def parse_callback(self, payload: dict[str, Any]) -> ProviderEvent:
         """Turn a Daraja-shaped STK callback into a ProviderEvent. Raises ValueError if
-        malformed. (Authenticity and amount checks belong to the callback endpoint, QSR-202.)"""
-        try:
-            callback = payload["Body"]["stkCallback"]
-            checkout_id = str(callback["CheckoutRequestID"])
-            code = int(callback["ResultCode"])
-            metadata = callback.get("CallbackMetadata") or {}
-            items = metadata.get("Item") or []
-        except (AttributeError, KeyError, TypeError, ValueError) as exc:
-            raise ValueError("Malformed STK callback") from exc
-        receipt = ""
-        for item in items:
-            if isinstance(item, dict) and item.get("Name") == "MpesaReceiptNumber":
-                receipt = str(item.get("Value", ""))
-        event = event_for_result_code(code)
-        if event == PaymentEvent.SUCCEEDED and not receipt:
-            raise ValueError("Success callback without a receipt number")
-        return ProviderEvent(
-            event=event,
-            checkout_request_id=checkout_id,
-            receipt_code=receipt,
-            result_code=code,
-            result_desc=str(callback.get("ResultDesc", "")),
-            raw=payload,
-        )
+        malformed."""
+        return parse_stk_callback(payload)
 
 
 class MockLedgerSource:

@@ -8,7 +8,7 @@ WORKDIR /app
 # "dev" includes black/flake8/mypy; use REQUIREMENTS=base for a production image
 ARG REQUIREMENTS=dev
 COPY requirements/ requirements/
-RUN pip install --no-cache-dir -r requirements/${REQUIREMENTS}.txt
+RUN pip install --no-cache-dir --default-timeout=120 --retries=5 -r requirements/${REQUIREMENTS}.txt
 
 COPY . .
 

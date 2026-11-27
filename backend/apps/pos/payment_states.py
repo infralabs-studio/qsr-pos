@@ -33,6 +33,10 @@ TRANSITIONS: dict[tuple[str, str], str] = {
     ("timed_out", "failed"): "failed",
     ("timed_out", "cancelled"): "cancelled",
     ("cancelled", "succeeded"): "confirmed",
+    # Money arrived but something does not add up (e.g. wrong amount): a human decides.
+    ("pending", "flagged_for_review"): "manager_review",
+    ("timed_out", "flagged_for_review"): "manager_review",
+    ("cancelled", "flagged_for_review"): "manager_review",
     # The provider said "failed" and then "succeeded": contradictory, never auto-confirm.
     ("failed", "succeeded"): "manager_review",
     # Manual M-PESA (created directly as pending_verification) and reconciliation
